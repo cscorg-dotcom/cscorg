@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>cscorg</title>
+<style>
+:root{--bg:#06101a;--panel:#112433;--accent:#1fa8ff;--card-width:90px;--card-height:120px;--gap:14px}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial;margin:0;background:linear-gradient(180deg,var(--bg),#051222);color:#eaf6ff;overflow-x:hidden}
+.table{max-width:1300px;margin:26px auto;background:linear-gradient(180deg,#0f2840,#081827);padding:28px;border-radius:18px;box-shadow:0 18px 60px rgba(0,0,0,.6);position:relative;transform:scale(1);}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+h1{font-size:32px;margin:0;color:var(--accent);text-shadow:0 0 18px rgba(31,168,255,.12)}
+.controls{display:flex;gap:12px;align-items:center}
+.controls .balance{font-size:18px}
+button{background:var(--accent);border:none;padding:12px 18px;border-radius:12px;color:white;cursor:pointer;font-size:16px;transition:transform .12s,box-shadow .12s;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+button:hover{transform:translateY(-3px) scale(1.02);}
+button:active{transform:scale(.98)}
+button:disabled{opacity:.45;transform:none;cursor:not-allowed}
+input[type=number]{padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.06); background:#07131b;color:white;font-size:15px}
+.hand-row{display:flex;gap:18px;align-items:flex-start;margin-top:22px}
+.box{background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));padding:18px;border-radius:14px;min-width:320px;backdrop-filter:blur(6px);flex:1}
+.cards{display:flex;gap:var(--gap);margin-top:16px;min-height:140px;align-items:flex-end}
+.flipper{position:relative;width:var(--card-width);height:var(--card-height);perspective:1000px;}
+.inner{position:absolute;inset:0;transition:transform 0.5s ease;transform-style:preserve-3d;}
+.flip .inner{transform:rotateY(180deg);}
+.face{position:absolute;inset:0;border-radius:12px;backface-visibility:hidden;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:22px}
+.face.front{background:white;color:black}
+.face.back{background:linear-gradient(135deg,#244f8d,#12324f);color:white;transform:rotateY(180deg)}
+.status{margin-top:18px;font-size:16px}
+.small{font-size:13px;color:#bcd}
+.small.value-text{font-size:16px;color:#bcd;}
+.active-hand{box-shadow:0 0 30px rgba(31,168,255,.65) inset;transition:box-shadow .25s}
+.cards .highlight {
+  transform: scale(1.15);
+  box-shadow: 0 0 30px rgba(31, 168, 255, 0.8);
+  transition: transform 0.3s, box-shadow 0.3s;
+  border-radius: 12px;
+}
+.controls-row{margin-top:20px;display:flex;gap:12px;align-items:center;justify-content:center}
+</style>
+</head>
+<body>
+<div class="table">
+<header>
+  <h1>Blackjack</h1>
+  <div class="controls">
+    <div class="balance">Balance: <strong id="balance">1000</strong> €</div>
+    <input id="addAmount" type="number" min="1" placeholder="Pridať" />
+    <button id="addBtn">Pridať</button>
+    <label class="small">Stávka:</label>
+    <input id="betInput" type="number" min="1" value="10" />
+    <button id="dealBtn">Deal</button>
+  </div>
+</header>
+
+<div class="hand-row">
+  <div class="box" id="dealerBox">
+    <strong>Dealer</strong>
+    <div id="dealerCards" class="cards"></div>
+    <div class="small value-text">Hodnota (viditeľná): <span id="dealerVisibleValue">-</span></div>
+  </div>
+
+  <div class="box" id="playerBox">
+    <strong>Hráč</strong>
+    <div id="playerHands"></div>
+    <div class="status" id="gameStatus"></div>
+  </div>
+</div>
+
+<div class="controls-row">
+  <button id="hitBtn">Hit</button>
+  <button id="standBtn">Stand</button>
+  <button id="doubleBtn">Double</button>
+  <button id="splitBtn">Split</button>
+</div>
+</div>
+
+<script>
+/* --- utility & deck --- */
+const ranks=['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+const suits=['♠','♥','♦','♣'];
+
+function makeDeck(){ const d=[]; for(const r of ranks) for(const s of suits) d.push({rank:r,suit:s}); return d; }
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
+function cardValue(c){ if(c.rank==='A') return 11; if(['J','Q','K'].includes(c.rank)) return 10; return parseInt(c.rank,10); }
+function bestHandValue(cs){ let t=0,a=0; for(const c of cs){ if(c.rank==='A'){a++; t+=11;} else t+=cardValue(c);} while(t>21&&a>0){t-=10;a--;} return t; }
+
+/* --- state --- */
+let deck=[], dealer={cards:[],hidden:true}, playerHands=[], activeHandIndex=0, balance=1000, splitUsed=false, gameActive=false;
+
+/* --- elements --- */
+const balanceEl=document.getElementById('balance');
+const addAmount=document.getElementById('addAmount');
+const addBtn=document.getElementById('addBtn');
+const betInput=document.getElementById('betInput');
+const dealBtn=document.getElementById('dealBtn');
+const dealerCardsEl=document.getElementById('dealerCards');
+const dealerVisibleValueEl=document.getElementById('dealerVisibleValue');
+const playerHandsEl=document.getElementById('playerHands');
+const hitBtn=document.getElementById('hitBtn');
+const standBtn=document.getElementById('standBtn');
+const doubleBtn=document.getElementById('doubleBtn');
+const splitBtn=document.getElementById('splitBtn');
+const gameStatus=document.getElementById('gameStatus');
+
+function renderBalance(){ balanceEl.textContent = balance.toFixed(2); }
+renderBalance();
+
+addBtn.addEventListener('click',()=>{
+  const v=Number(addAmount.value);
+  if(!v||v<=0) return alert('Zadaj kladnú sumu');
+  balance+=v; renderBalance(); addAmount.value='';
+});
+
+/* --- deck ops --- */
+function startNewDeck(){ deck=makeDeck(); shuffle(deck); }
+function draw(){ if(deck.length<15) startNewDeck(); return deck.pop(); }
+
+/* --- UI card DOM --- */
+function renderCardDOM(c,back=false){
+  const wrapper=document.createElement('div'); wrapper.className='flipper';
+  const inner=document.createElement('div'); inner.className='inner';
+  const front=document.createElement('div'); front.className='face front'; front.textContent=c.rank+c.suit;
+  const backFace=document.createElement('div'); backFace.className='face back'; backFace.textContent='';
+  inner.appendChild(front); inner.appendChild(backFace); wrapper.appendChild(inner);
+  if(back) wrapper.classList.add('flip');
+  return wrapper;
+}
+
+/* --- render all --- */
+function renderAll(){
+  // dealer
+  dealerCardsEl.innerHTML='';
+  dealer.cards.forEach((c,i)=>{
+    const back = (i===1 && dealer.hidden);
+    dealerCardsEl.appendChild(renderCardDOM(c,back));
+  });
+  const vis = (dealer.hidden && dealer.cards.length>0)? [dealer.cards[0]]:dealer.cards;
+  dealerVisibleValueEl.textContent = vis.length? bestHandValue(vis):'-';
+
+  // player hands
+  playerHandsEl.innerHTML='';
+  playerHands.forEach((h,idx)=>{
+    const container=document.createElement('div');
+    container.style.marginBottom='16px';
+    container.style.padding='10px';
+    if(idx===activeHandIndex && !h.finished) container.classList.add('active-hand');
+
+    const title=document.createElement('div');
+    title.textContent = `Ruka ${idx+1} — stávka: ${h.bet.toFixed(2)} €`;
+    container.appendChild(title);
+
+    const cardsDiv=document.createElement('div'); cardsDiv.className='cards';
+    h.cards.forEach((c,ci)=>{
+      const cardEl = renderCardDOM(c,false);
+      if(ci === h.cards.length-1 && !h.finished) cardEl.classList.add('highlight');
+      cardsDiv.appendChild(cardEl);
+    });
+    container.appendChild(cardsDiv);
+
+    const v=document.createElement('div'); v.className='small value-text';
+    v.textContent='Hodnota: '+bestHandValue(h.cards);
+    container.appendChild(v);
+
+    if(h.finished){
+      const st=document.createElement('div'); st.className='small'; st.textContent='Ukončená';
+      container.appendChild(st);
+    }
+
+    playerHandsEl.appendChild(container);
+  });
+
+  // buttons enable/disable
+  if(playerHands.length===0){
+    hitBtn.disabled=standBtn.disabled=doubleBtn.disabled=splitBtn.disabled=true;
+    return;
+  }
+
+  const h = playerHands[activeHandIndex];
+  const hv = bestHandValue(h.cards);
+  const reached21 = hv === 21;
+
+  hitBtn.disabled = h.finished || !gameActive || reached21;
+  standBtn.disabled = h.finished || !gameActive || reached21;
+  doubleBtn.disabled = h.finished || h.cards.length!==2 || balance < h.bet || !gameActive || reached21;
+  splitBtn.disabled = !canSplitCurrent() || !gameActive || reached21;
+
+  if(!gameActive){ gameStatus.textContent=''; }
+}
+
+/* --- helpers --- */
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function resetTable(){ dealer={cards:[],hidden:true}; playerHands=[]; activeHandIndex=0; splitUsed=false; gameStatus.textContent=''; gameActive=false; renderAll(); }
+function canSplitCurrent(){ if(splitUsed) return false; if(playerHands.length!==1) return false; const h=playerHands[0]; if(!h || h.cards.length!==2) return false; return h.cards[0].rank===h.cards[1].rank; }
+
+/* --- dealer turn with special rule:
+     if ANY player hand has value 21 -> dealer flips, draws ONLY ONE card,
+     then we resolve (tie on 21 = push, else player wins) --- */
+async function dealerTurn(){
+  if(!dealer.hidden) return;
+  dealer.hidden = false;
+  renderAll();
+  await sleep(600);
+
+  const playerHas21 = playerHands.some(h => bestHandValue(h.cards) === 21);
+
+  if(playerHas21){
+    // dealer draws only ONE card
+    const newCard = draw();
+    dealer.cards.push(newCard);
+    renderAll();
+    const cards = dealerCardsEl.querySelectorAll('.flipper');
+    const lastCard = cards[cards.length-1];
+    lastCard.classList.add('highlight');
+    await sleep(600);
+    lastCard.classList.remove('highlight');
+
+    // resolve immediately (push if dealer also 21)
+    resolveRound();
+    return;
+  }
+
+  // normal dealer behavior: hit until 17+
+  let val = bestHandValue(dealer.cards);
+  while(val < 17){
+    const newCard = draw();
+    dealer.cards.push(newCard);
+    renderAll();
+    const cards = dealerCardsEl.querySelectorAll('.flipper');
+    const lastCard = cards[cards.length-1];
+    lastCard.classList.add('highlight');
+    await sleep(600);
+    lastCard.classList.remove('highlight');
+    val = bestHandValue(dealer.cards);
+  }
+  resolveRound();
+}
+
+/* --- deal & initial checks --- */
+function dealInitial(){
+  if(gameActive) return;
+  gameActive=true;
+  const bet = Number(betInput.value);
+  if(!bet||bet<=0) return alert('Neplatná stávka');
+  if(bet>balance) return alert('Nedostatok prostriedkov');
+  startNewDeck();
+  balance-=bet; renderBalance();
+  playerHands=[{cards:[],bet:bet,finished:false,doubled:false}];
+  dealer={cards:[],hidden:true};
+  splitUsed=false;
+  activeHandIndex=0;
+  // initial cards
+  playerHands[0].cards.push(draw());
+  dealer.cards.push(draw());
+  playerHands[0].cards.push(draw());
+  dealer.cards.push(draw());
+  renderAll();
+  checkForImmediateBlackjack();
+}
+
+/* --- immediate blackjack handling --- */
+function checkForImmediateBlackjack(){
+  const p = playerHands[0];
+  const pv = bestHandValue(p.cards);
+  const dv = bestHandValue(dealer.cards);
+  const playerBJ = p.cards.length === 2 && pv === 21;
+  const dealerBJ = dealer.cards.length === 2 && dv === 21;
+
+  if(playerBJ || dealerBJ){
+    dealer.hidden = false;
+    renderAll();
+    setTimeout(()=>{
+      if(playerBJ && !dealerBJ){
+        const payout = p.bet * 2.5; // blackjack pays 3:2
+        balance += payout;
+        gameStatus.textContent = `Blackjack! Vyhrávate ${payout.toFixed(2)} €.`;
+      } else if(dealerBJ && !playerBJ){
+        gameStatus.textContent = 'Dealer má blackjack. Prehrali ste.';
+      } else {
+        balance += p.bet;
+        gameStatus.textContent = 'Push (remíza).';
+      }
+      renderBalance();
+      playerHands.forEach(h => h.finished = true);
+      renderAll();
+      gameActive = false;
+    }, 700);
+  }
+}
+
+/* --- resolve round --- */
+function resolveRound(){
+  const dv = bestHandValue(dealer.cards);
+  const db = dv > 21;
+  const messages = [];
+
+  playerHands.forEach(h=>{
+    const pv = bestHandValue(h.cards);
+
+    if(pv > 21){
+      messages.push(`Ruka (${h.bet.toFixed(2)}€) - Bust. Prehrávate.`);
+      return;
+    }
+
+    // if both have 21 and both length==2 it's handled earlier (blackjack), here we interpret normally:
+    if(pv === 21 && dv === 21){
+      messages.push(`Ruka (${h.bet.toFixed(2)}€) - Push (remíza).`);
+      balance += h.bet;
+      return;
+    }
+
+    // Special: if player has 21 and dealer does not -> player wins (handles the "dealer drew 1 card" case)
+    if(pv === 21 && dv !== 21){
+      const payout = h.bet * 2;
+      balance += payout;
+      messages.push(`Ruka (${h.bet.toFixed(2)}€) - Vyhrávate ${payout.toFixed(2)}€.`);
+      return;
+    }
+
+    if(db){
+      const payout = h.bet * 2;
+      balance += payout;
+      messages.push(`Ruka (${h.bet.toFixed(2)}€) - Dealer bust. Vyhrávate ${payout.toFixed(2)}€.`);
+      return;
+    }
+
+    if(pv > dv){
+      const payout = h.bet * 2;
+      balance += payout;
+      messages.push(`Ruka (${h.bet.toFixed(2)}€) - Vyhrávate ${payout.toFixed(2)}€.`);
+    } else if(pv < dv){
+      messages.push(`Ruka (${h.bet.toFixed(2)}€) - Prehrávate.`);
+    } else {
+      balance += h.bet;
+      messages.push(`Ruka (${h.bet.toFixed(2)}€) - Push (remíza). Vrátené: ${h.bet.toFixed(2)}€.`);
+    }
+  });
+
+  renderBalance();
+  gameStatus.innerHTML = messages.join('<br>');
+  renderAll();
+  gameActive = false;
+}
+
+/* --- player flow helpers --- */
+function advanceAfterHand(){
+  for(let i=activeHandIndex+1;i<playerHands.length;i++) if(!playerHands[i].finished){ activeHandIndex=i; renderAll(); return; }
+  for(let i=0;i<activeHandIndex;i++) if(!playerHands[i].finished){ activeHandIndex=i; renderAll(); return; }
+  // no more active hands -> dealer's turn
+  dealerTurn();
+}
+
+/* --- player actions --- */
+function playerHit(){
+  const h = playerHands[activeHandIndex];
+  if(h.finished) return;
+  h.cards.push(draw());
+  if(bestHandValue(h.cards) >= 21) h.finished = true;
+  renderAll();
+  if(h.finished) advanceAfterHand();
+}
+function playerStand(){
+  playerHands[activeHandIndex].finished = true;
+  advanceAfterHand();
+  renderAll();
+}
+function playerDouble(){
+  const h = playerHands[activeHandIndex];
+  if(h.cards.length !== 2 || balance < h.bet) return;
+  balance -= h.bet;
+  h.bet *= 2;
+  h.doubled = true;
+  h.cards.push(draw());
+  h.finished = true;
+  renderBalance();
+  renderAll();
+  advanceAfterHand();
+}
+function playerSplit(){
+  if(!canSplitCurrent()) return;
+  const o = playerHands[0];
+  if(balance < o.bet) return alert('Nedostatok pro split');
+  splitUsed = true;
+  const movedCard = o.cards.splice(1,1)[0];
+  balance -= o.bet; renderBalance();
+  playerHands = [
+    {cards: o.cards.slice(), bet: o.bet, finished:false, doubled:false},
+    {cards: [movedCard], bet: o.bet, finished:false, doubled:false}
+  ];
+  playerHands[0].cards.push(draw());
+  playerHands[1].cards.push(draw());
+  activeHandIndex = 0;
+  renderAll();
+}
+
+/* --- events --- */
+dealBtn.addEventListener('click',()=>{ gameStatus.textContent = ''; dealInitial(); });
+hitBtn.addEventListener('click',playerHit);
+standBtn.addEventListener('click',playerStand);
+doubleBtn.addEventListener('click',playerDouble);
+splitBtn.addEventListener('click',playerSplit);
+
+/* --- init --- */
+startNewDeck();
+renderAll();
+</script>
+</body>
+</html>
